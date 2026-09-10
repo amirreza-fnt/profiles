@@ -1,0 +1,33 @@
+[Unit]
+Description=Profile Service (ASP.NET Core) - سامانه اطلاعات کاربران مبتنی بر SSO
+Documentation=https://apiweb-profilesystem.sabzevar.ir/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/profileservice
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=ASPNETCORE_URLS=http://0.0.0.0:__KESTREL_PORT__
+
+EnvironmentFile=-/etc/profileservice.env
+
+Environment=Sso__BaseUrl=http://127.0.0.1:5001
+Environment=Swagger__Enabled=true
+
+ExecStart=/usr/bin/dotnet /opt/profileservice/ProfileService.Api.dll
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+User=profileservice
+Group=profileservice
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/log/profileservice
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
