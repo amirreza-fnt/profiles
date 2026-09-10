@@ -9,7 +9,6 @@ NGINX_CONF="/etc/nginx/conf.d/apiweb-profilesystem.conf"
 PUBLISH_DIR="$REPO_DIR/publish"
 PORT_FILE="/etc/profileservice.port"
 
-# Service listens on 5027 (user requirement). HTTPS domain terminates at nginx:443.
 KESTREL_PORT=5027
 PUBLIC_PORT=5027
 
@@ -40,13 +39,21 @@ allow_selinux_http_port() {
 }
 
 verify_deploy() {
-  echo "  Verifying listeners..."
-  ss -tln | grep -E ":${KESTREL_PORT}" || echo "  WARNING: port ${KESTREL_PORT} not listening yet."
-  sleep 2
+  echo "  Waiting for listen on :${KESTREL_PORT} ..."
+  local i
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    if ss -tln 2>/dev/null | grep -qE ":${KESTREL_PORT}\\b"; then
+      break
+    fi
+    sleep 1
+  done
+  ss -tln | grep -E ":${KESTREL_PORT}" || echo "  WARNING: port ${KESTREL_PORT} not listening."
+
   if curl -sf "http://127.0.0.1:${KESTREL_PORT}/health" >/dev/null; then
-    echo "  Health OK on http://127.0.0.1:${KESTREL_PORT}/health"
+    echo "  Health OK: http://127.0.0.1:${KESTREL_PORT}/health"
   else
-    echo "  WARNING: health failed — check: journalctl -u ${APP_NAME} -n 50"
+    echo "  WARNING: health failed — last logs:"
+    sudo journalctl -u "${APP_NAME}" -n 40 --no-pager || true
   fi
 }
 
@@ -54,7 +61,6 @@ echo "============================================"
 echo "   Deploying $APP_NAME (offline-ready)"
 echo "============================================"
 echo "  Kestrel port: ${KESTREL_PORT}"
-echo "  Domain:       https://apiweb-profilesystem.sabzevar.ir/"
 echo "${PUBLIC_PORT} ${KESTREL_PORT}" | sudo tee "$PORT_FILE" >/dev/null
 
 if [ -d "$PUBLISH_DIR" ] && [ -f "$PUBLISH_DIR/ProfileService.Api.dll" ]; then
@@ -63,64 +69,55 @@ if [ -d "$PUBLISH_DIR" ] && [ -f "$PUBLISH_DIR/ProfileService.Api.dll" ]; then
   if command -v rsync >/dev/null 2>&1; then
     sudo rsync -a --delete "$PUBLISH_DIR/" "$API_DIR/"
   else
-    sudo rm -rf "$API_DIR"/*
+    sudo rm -rf "${API_DIR:?}/"*
     sudo cp -a "$PUBLISH_DIR"/. "$API_DIR/"
   fi
 else
-  echo "[1/5] publish/ missing — trying dotnet publish..."
-  if ! command -v dotnet >/dev/null 2>&1; then
-    echo "  ERROR: No publish/ folder and no dotnet SDK (expected on offline AlmaLinux)."
-    exit 1
-  fi
-  sudo mkdir -p "$API_DIR"
-  dotnet publish "$REPO_DIR/src/ProfileService.Api/ProfileService.Api.csproj" \
-    -c Release \
-    -o "$API_DIR" \
-    --self-contained false
+  echo "[1/5] ERROR: publish/ missing."
+  exit 1
 fi
 
-echo "[2/5] Database migrations run automatically on first start."
+sudo mkdir -p "$API_DIR/logs" /var/log/profileservice
 
-echo "[3/5] nginx (HTTPS domain -> :5027)..."
+echo "[2/5] Database note: migrations run on start if SQL is reachable."
+echo "      If DB missing, run deploy/create-database.sql in SSMS once."
+
+echo "[3/5] nginx..."
+# Remove previous conflicting SSL vhost we may have written; domain already exists in apis.conf
+if [ -f "$NGINX_CONF" ]; then
+  echo "  Removing conflicting ${NGINX_CONF} (use existing SSL vhost -> 127.0.0.1:5027)"
+  sudo rm -f "$NGINX_CONF"
+fi
+sudo cp "$REPO_DIR/deploy/nginx.conf.template" /opt/profileservice/nginx-notes.conf
 if command -v nginx >/dev/null 2>&1; then
-  sudo cp "$REPO_DIR/deploy/nginx.conf.template" "$NGINX_CONF"
-  echo "  Wrote ${NGINX_CONF} — enable SSL cert lines before production use."
-  if sudo nginx -t; then
-    sudo systemctl reload nginx || true
-  else
-    echo "  WARNING: nginx -t failed (often missing SSL certs). Fix certs then reload."
-  fi
-  open_firewall_port
-  allow_selinux_http_port
-else
-  echo "  nginx not installed — app still serves HTTP on :${KESTREL_PORT}"
-  open_firewall_port
+  sudo nginx -t && sudo systemctl reload nginx || true
 fi
+open_firewall_port
+allow_selinux_http_port
 
 echo "[4/5] systemd + env..."
 render_template "$REPO_DIR/deploy/profileservice.service.template" "$SERVICE_FILE"
 sudo useradd -r -s /usr/sbin/nologin profileservice 2>/dev/null || true
-sudo mkdir -p /var/log/profileservice
-sudo chown -R profileservice:profileservice /var/log/profileservice "$API_DIR"
-if [ ! -f /etc/profileservice.env ]; then
-  echo "  Installing /etc/profileservice.env from deploy/profileservice.env.example ..."
-  sudo cp "$REPO_DIR/deploy/profileservice.env.example" /etc/profileservice.env
-fi
+# Always refresh env from example (no ConnectionString with $ — safer)
+sudo cp "$REPO_DIR/deploy/profileservice.env.example" /etc/profileservice.env
+# Strip any old ConnectionStrings line that breaks $ password
+sudo sed -i '/^ConnectionStrings__Profile=/d' /etc/profileservice.env
 sudo chown root:profileservice /etc/profileservice.env
 sudo chmod 640 /etc/profileservice.env
+sudo chown -R profileservice:profileservice /var/log/profileservice "$API_DIR"
 
 echo "[5/5] start..."
 sudo systemctl daemon-reload
 sudo systemctl enable "$APP_NAME"
 sudo systemctl restart "$APP_NAME"
+sleep 2
 sudo systemctl status "$APP_NAME" --no-pager || true
 verify_deploy
 
 echo ""
 echo "============================================"
 echo "   Deploy complete!"
-echo "   Health:  curl http://127.0.0.1:${KESTREL_PORT}/health"
-echo "   Public:  curl http://SERVER_IP:${PUBLIC_PORT}/health"
-echo "   Domain:  https://apiweb-profilesystem.sabzevar.ir/"
+echo "   curl http://127.0.0.1:${KESTREL_PORT}/health"
+echo "   curl http://127.0.0.1:${KESTREL_PORT}/api/health"
+echo "   journalctl -u ${APP_NAME} -n 80 --no-pager"
 echo "============================================"
-echo "Logs: sudo journalctl -u $APP_NAME -f"

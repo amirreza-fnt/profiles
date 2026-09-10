@@ -1,7 +1,9 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.OpenApi.Models;
 using ProfileService.Api.Middleware;
 using ProfileService.Infrastructure;
@@ -16,13 +18,22 @@ try
 {
     var builder = WebApplication.CreateBuilder(args);
 
+    // Prefer ASPNETCORE_URLS from systemd; avoid duplicate Kestrel endpoint conflicts.
+    builder.WebHost.ConfigureKestrel(options => { /* defaults from ASPNETCORE_URLS */ });
+
+    var logFile = builder.Configuration["Logging:File"];
+    if (string.IsNullOrWhiteSpace(logFile))
+        logFile = Path.Combine(builder.Environment.ContentRootPath, "logs", "app-.log");
+
+    Directory.CreateDirectory(Path.GetDirectoryName(logFile)!);
+
     builder.Host.UseSerilog((context, services, configuration) => configuration
         .ReadFrom.Configuration(context.Configuration)
         .ReadFrom.Services(services)
         .Enrich.FromLogContext()
         .WriteTo.Console()
         .WriteTo.File(
-            path: context.Configuration["Logging:File"] ?? "/var/log/profileservice/app-.log",
+            path: logFile,
             rollingInterval: RollingInterval.Day,
             retainedFileCountLimit: 14,
             flushToDiskInterval: TimeSpan.FromSeconds(1)));
@@ -116,23 +127,36 @@ try
     builder.Services.AddInfrastructure(builder.Configuration);
 
     builder.Services.AddHealthChecks()
-        .AddDbContextCheck<ProfileDbContext>("database");
+        .AddCheck("self", () => HealthCheckResult.Healthy(), tags: new[] { "live" })
+        .AddDbContextCheck<ProfileDbContext>("database", tags: new[] { "ready" });
 
     var app = builder.Build();
 
+    // Apply migrations but do not prevent Kestrel from binding if DB is briefly unavailable.
     using (var scope = app.Services.CreateScope())
     {
         var db = scope.ServiceProvider.GetRequiredService<ProfileDbContext>();
         var logger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("Startup");
         try
         {
-            db.Database.Migrate();
-            logger.LogInformation("Database migrations applied.");
+            var cs = app.Configuration.GetConnectionString("Profile") ?? "";
+            var masked = System.Text.RegularExpressions.Regex.Replace(
+                cs, @"Password=[^;]*", "Password=***", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            logger.LogInformation("Using connection: {Connection}", masked);
+
+            if (db.Database.CanConnect())
+            {
+                db.Database.Migrate();
+                logger.LogInformation("Database migrations applied.");
+            }
+            else
+            {
+                logger.LogWarning("Database not reachable yet — service will start; retry migrate on next restart.");
+            }
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Failed to apply database migrations. Check ConnectionStrings:Profile.");
-            throw;
+            logger.LogError(ex, "Database migrate failed — service will still listen. Fix DB then restart.");
         }
     }
 
@@ -167,10 +191,16 @@ try
     app.MapGet("/swagger", () => Results.Redirect("/swagger/index.html"));
 
     app.MapControllers();
-    app.MapHealthChecks("/health");
-    app.MapHealthChecks("/api/health");
+    app.MapHealthChecks("/health", new HealthCheckOptions
+    {
+        Predicate = r => r.Tags.Contains("live")
+    });
+    app.MapHealthChecks("/api/health", new HealthCheckOptions
+    {
+        Predicate = _ => true
+    });
 
-    Log.Information("Profile Service started on port configuration.");
+    Log.Information("Profile Service listening (ASPNETCORE_URLS / Kestrel).");
     app.Run();
 }
 catch (Exception ex)

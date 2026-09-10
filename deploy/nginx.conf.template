@@ -1,42 +1,14 @@
-# Profile Service reverse proxy
-# HTTPS edge (443) -> Kestrel 127.0.0.1:5027
-# Replace ssl_certificate paths with your real certs.
-
-upstream profileservice {
-    server 127.0.0.1:5027;
-    keepalive 64;
-}
-
-server {
-    listen 80;
-    listen [::]:80;
-    server_name apiweb-profilesystem.sabzevar.ir;
-    return 301 https://$host$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
-    server_name apiweb-profilesystem.sabzevar.ir;
-
-    # ssl_certificate     /etc/ssl/sabzevar/apiweb-profilesystem.crt;
-    # ssl_certificate_key /etc/ssl/sabzevar/apiweb-profilesystem.key;
-
-    client_max_body_size 10m;
-
-    location / {
-        proxy_pass http://profileservice;
-        proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_connect_timeout 10s;
-        proxy_read_timeout 120s;
-        proxy_send_timeout 120s;
-    }
-}
-
-# Optional direct HTTP access on 5027 is served by Kestrel itself (ASPNETCORE_URLS).
-# Do NOT also listen 5027 here — that would conflict with the app.
+# Profile service listens directly on TCP 5027 (Kestrel).
+# Domain apiweb-profilesystem.sabzevar.ir is already configured elsewhere (apis.conf).
+# Point that existing SSL vhost upstream to: 127.0.0.1:5027
+#
+# Example location block to merge into the existing server { ... }:
+#
+#   location / {
+#       proxy_pass http://127.0.0.1:5027;
+#       proxy_http_version 1.1;
+#       proxy_set_header Host $host;
+#       proxy_set_header X-Real-IP $remote_addr;
+#       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#       proxy_set_header X-Forwarded-Proto $scheme;
+#   }

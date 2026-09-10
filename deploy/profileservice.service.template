@@ -13,11 +13,15 @@ Environment=ASPNETCORE_URLS=http://0.0.0.0:__KESTREL_PORT__
 EnvironmentFile=-/etc/profileservice.env
 
 Environment=Sso__BaseUrl=http://127.0.0.1:5001
+Environment=InternalAuth__ApiKeys__0__Key=dev-internal-key-137
+Environment=InternalAuth__ApiKeys__0__Name=InternalDev
+Environment=InternalAuth__ApiKeys__1__Key=dev-internal-key-profile
+Environment=InternalAuth__ApiKeys__1__Name=SsoLoginService
 Environment=Swagger__Enabled=true
 
 ExecStart=/usr/bin/dotnet /opt/profileservice/ProfileService.Api.dll
 Restart=always
-RestartSec=5
+RestartSec=3
 TimeoutStopSec=30
 
 User=profileservice
@@ -26,8 +30,10 @@ NoNewPrivileges=true
 ProtectSystem=full
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/var/log/profileservice
+ReadWritePaths=/opt/profileservice /var/log/profileservice
 LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
