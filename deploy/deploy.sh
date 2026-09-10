@@ -102,12 +102,12 @@ render_template "$REPO_DIR/deploy/profileservice.service.template" "$SERVICE_FIL
 sudo useradd -r -s /usr/sbin/nologin profileservice 2>/dev/null || true
 sudo mkdir -p /var/log/profileservice
 sudo chown -R profileservice:profileservice /var/log/profileservice "$API_DIR"
-if [ -f /etc/profileservice.env ]; then
-  sudo chown root:profileservice /etc/profileservice.env
-  sudo chmod 640 /etc/profileservice.env
-else
-  echo "  WARNING: copy deploy/profileservice.env.example -> /etc/profileservice.env and edit secrets"
+if [ ! -f /etc/profileservice.env ]; then
+  echo "  Installing /etc/profileservice.env from deploy/profileservice.env.example ..."
+  sudo cp "$REPO_DIR/deploy/profileservice.env.example" /etc/profileservice.env
 fi
+sudo chown root:profileservice /etc/profileservice.env
+sudo chmod 640 /etc/profileservice.env
 
 echo "[5/5] start..."
 sudo systemctl daemon-reload
