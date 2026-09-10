@@ -1,5 +1,4 @@
 using ProfileService.Domain.Entities;
-using ProfileService.Domain.Enums;
 
 namespace ProfileService.Application.Interfaces;
 
